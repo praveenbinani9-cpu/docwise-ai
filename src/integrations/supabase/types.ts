@@ -14,7 +14,68 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      extractions: {
+        Row: {
+          created_at: string
+          document_type: string | null
+          id: string
+          overall_confidence: number | null
+          page_count: number | null
+          result: Json
+          tenant_id: string
+        }
+        Insert: {
+          created_at?: string
+          document_type?: string | null
+          id?: string
+          overall_confidence?: number | null
+          page_count?: number | null
+          result: Json
+          tenant_id: string
+        }
+        Update: {
+          created_at?: string
+          document_type?: string | null
+          id?: string
+          overall_confidence?: number | null
+          page_count?: number | null
+          result?: Json
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "extractions_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tenants: {
+        Row: {
+          api_key: string
+          created_at: string
+          id: string
+          name: string
+          status: string
+        }
+        Insert: {
+          api_key: string
+          created_at?: string
+          id?: string
+          name: string
+          status?: string
+        }
+        Update: {
+          api_key?: string
+          created_at?: string
+          id?: string
+          name?: string
+          status?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
