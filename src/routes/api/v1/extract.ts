@@ -83,7 +83,7 @@ export const Route = createFileRoute("/api/v1/extract")({
             document_type,
             overall_confidence,
             page_count: parsed.data.images.length,
-            result: parsedJson ?? {},
+            result: (parsedJson ?? {}) as never,
           })
           .select("id, created_at")
           .single();
