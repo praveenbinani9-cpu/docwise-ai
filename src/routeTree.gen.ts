@@ -11,7 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UploadRouteImport } from './routes/upload'
 import { Route as ExtractRouteImport } from './routes/extract'
+import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiV1ExtractRouteImport } from './routes/api/v1/extract'
 
 const UploadRoute = UploadRouteImport.update({
   id: '/upload',
@@ -23,40 +25,58 @@ const ExtractRoute = ExtractRouteImport.update({
   path: '/extract',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1ExtractRoute = ApiV1ExtractRouteImport.update({
+  id: '/api/v1/extract',
+  path: '/api/v1/extract',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/extract': typeof ExtractRoute
   '/upload': typeof UploadRoute
+  '/api/v1/extract': typeof ApiV1ExtractRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/extract': typeof ExtractRoute
   '/upload': typeof UploadRoute
+  '/api/v1/extract': typeof ApiV1ExtractRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin': typeof AdminRoute
   '/extract': typeof ExtractRoute
   '/upload': typeof UploadRoute
+  '/api/v1/extract': typeof ApiV1ExtractRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/extract' | '/upload'
+  fullPaths: '/' | '/admin' | '/extract' | '/upload' | '/api/v1/extract'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/extract' | '/upload'
-  id: '__root__' | '/' | '/extract' | '/upload'
+  to: '/' | '/admin' | '/extract' | '/upload' | '/api/v1/extract'
+  id: '__root__' | '/' | '/admin' | '/extract' | '/upload' | '/api/v1/extract'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRoute: typeof AdminRoute
   ExtractRoute: typeof ExtractRoute
   UploadRoute: typeof UploadRoute
+  ApiV1ExtractRoute: typeof ApiV1ExtractRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -75,6 +95,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ExtractRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -82,13 +109,22 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/extract': {
+      id: '/api/v1/extract'
+      path: '/api/v1/extract'
+      fullPath: '/api/v1/extract'
+      preLoaderRoute: typeof ApiV1ExtractRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRoute: AdminRoute,
   ExtractRoute: ExtractRoute,
   UploadRoute: UploadRoute,
+  ApiV1ExtractRoute: ApiV1ExtractRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
