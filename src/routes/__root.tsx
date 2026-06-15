@@ -81,13 +81,19 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         content:
           "AI-powered extraction for GST invoices, E-Way Bills, POs and more. Upload a document and get clean structured JSON in seconds.",
       },
-      { property: "og:title", content: "DocExtract AI" },
+      { property: "og:title", content: "DocExtract AI — Extract structured data from invoices in seconds" },
       {
         property: "og:description",
         content: "Premium AI extraction for business documents — structured JSON in seconds.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "DocExtract AI — Extract structured data from invoices in seconds" },
+      { name: "description", content: "DocExtract AI extracts structured data from business documents like invoices and purchase orders." },
+      { property: "og:description", content: "DocExtract AI extracts structured data from business documents like invoices and purchase orders." },
+      { name: "twitter:description", content: "DocExtract AI extracts structured data from business documents like invoices and purchase orders." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/c8ad5449-6cec-41e8-ac43-37fc02c49af8/id-preview-638111ed--1d8de982-3e43-4a15-8621-a7f47022d23d.lovable.app-1781356904668.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/c8ad5449-6cec-41e8-ac43-37fc02c49af8/id-preview-638111ed--1d8de982-3e43-4a15-8621-a7f47022d23d.lovable.app-1781356904668.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
