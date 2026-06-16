@@ -82,6 +82,34 @@ export type ExtractCoreResult = {
 };
 
 export async function extractCore(images: string[], hint?: string): Promise<ExtractCoreResult> {
+   function detectMimeType(b64: string): string {
+  try {
+    const head = atob(b64.slice(0, 16));
+
+    const b0 = head.charCodeAt(0);
+    const b1 = head.charCodeAt(1);
+
+    if (b0 === 0x89 && b1 === 0x50) return "image/png";
+    if (b0 === 0xff && b1 === 0xd8) return "image/jpeg";
+    if (b0 === 0x52 && b1 === 0x49) return "image/webp";
+    if (b0 === 0x25 && b1 === 0x50) return "application/pdf";
+    if (b0 === 0x47 && b1 === 0x49) return "image/gif";
+  } catch {
+    // ignore
+  }
+
+  return "image/jpeg";
+}
+
+function normalizeImageUrl(input: string): string {
+  if (input.startsWith("data:")) {
+    return input;
+  }
+
+  const mime = detectMimeType(input);
+  return `data:${mime};base64,${input}`;
+}
+export async function extractCore(images: string[], hint?: string): Promise<ExtractCoreResult> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY is not configured");
 
@@ -90,7 +118,12 @@ export async function extractCore(images: string[], hint?: string): Promise<Extr
       type: "text",
       text: `Extract structured data from this document.${hint ? " Hint: " + hint : ""} Return JSON only.`,
     },
-    ...images.map((url) => ({ type: "image_url", image_url: { url } })),
+    ...images.map((url) => ({
+      type: "image_url",
+      image_url: {
+        url: normalizeImageUrl(url),
+    },
+    })),
   ];
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
