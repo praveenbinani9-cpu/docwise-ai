@@ -8,18 +8,23 @@ export const Route = createFileRoute("/api-test")({
   component: ApiTestPage,
 });
 
+const ENDPOINT = "https://docwise-ai-eight.vercel.app/api/v1/extract";
+
 function ApiTestPage() {
   const [apiKey, setApiKey] = useState("");
-  const [imageUrl, setImageUrl] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [dataUrl, setDataUrl] = useState("");
   const [response, setResponse] = useState<string>("");
   const [loading, setLoading] = useState(false);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setFileName(file.name);
+    setDataUrl("");
     const reader = new FileReader();
     reader.onload = () => {
-      setImageUrl(typeof reader.result === "string" ? reader.result : "");
+      setDataUrl(typeof reader.result === "string" ? reader.result : "");
     };
     reader.onerror = () => setResponse("Failed to read file");
     reader.readAsDataURL(file);
@@ -27,16 +32,20 @@ function ApiTestPage() {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!dataUrl) {
+      setResponse("Please select a file first.");
+      return;
+    }
     setLoading(true);
     setResponse("");
     try {
-      const res = await fetch("https://docwise-ai-eight.vercel.app/api/v1/extract", {
+      const res = await fetch(ENDPOINT, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ images: [imageUrl] }),
+        body: JSON.stringify({ images: [dataUrl] }),
       });
       const text = await res.text();
       try {
@@ -68,37 +77,28 @@ function ApiTestPage() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">Image URL</label>
-            <input
-              type="text"
-              value={imageUrl}
-              onChange={(e) => setImageUrl(e.target.value)}
-              placeholder="https://... or data:image/png;base64,..."
-              className="w-full rounded-lg border border-border bg-surface px-3 py-2 font-mono text-sm"
-              required
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium">Or upload image file</label>
+            <label className="mb-1 block text-sm font-medium">Upload file (JPG, PNG, PDF)</label>
             <input
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/jpg,application/pdf,.jpg,.jpeg,.png,.pdf"
               onChange={onFileChange}
               className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+              required
             />
-            <p className="mt-1 text-xs text-muted-foreground">
-              The file is converted to a base64 data URL in your browser before being sent.
-            </p>
+            {fileName && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Selected: {fileName} {dataUrl ? "(ready)" : "(reading…)"}
+              </p>
+            )}
           </div>
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !dataUrl}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
           >
             {loading ? "Submitting…" : "Submit"}
           </button>
         </form>
-
 
         {response && (
           <pre className="mt-6 overflow-auto rounded-lg border border-border bg-surface p-4 font-mono text-xs">
