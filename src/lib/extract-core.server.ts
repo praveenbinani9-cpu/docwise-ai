@@ -17,6 +17,13 @@ GST Invoice, Tax Invoice, E-Way Bill, Delivery Challan, Purchase Order, Credit N
    - Tax math: subtotal + cgst + sgst + igst ≈ grand_total (±1 for rounding). Flag mismatch by lowering "totals" field confidence.
    - Dates: convert to ISO YYYY-MM-DD. Treat DD/MM/YYYY as Indian convention unless context proves otherwise.
    - Numbers: strip currency symbols and thousands separators; keep decimals. Output as JSON numbers, not strings.
+   - GST classification:
+     * If seller state_code equals buyer state_code, use CGST + SGST and IGST must be 0.
+     * If seller state_code differs from buyer state_code, use IGST and CGST/SGST must be 0.
+     * Never infer CGST/SGST when the document explicitly shows IGST (or vice versa).
+     * Prefer the tax summary section over calculated assumptions.
+   - If the extracted tax structure does not reconcile with the invoice total, set validation.tax_math_ok = false and lower overall_confidence below 0.8.
+   - Prefer values from the totals section over values inferred from line items.
 6. SCORE confidence honestly per field:
    - 0.95–1.00 — printed, sharp, unambiguous, validated.
    - 0.80–0.94 — printed but partially occluded, slight ambiguity, or failed one validator.
