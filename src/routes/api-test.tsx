@@ -30,7 +30,7 @@ function ApiTestPage() {
     setLoading(true);
     setResponse("");
     try {
-      const res = await fetch("/api/v1/extract", {
+      const res = await fetch("https://docwise-ai-eight.vercel.app/api/v1/extract", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
