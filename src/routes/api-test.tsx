@@ -14,6 +14,17 @@ function ApiTestPage() {
   const [response, setResponse] = useState<string>("");
   const [loading, setLoading] = useState(false);
 
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImageUrl(typeof reader.result === "string" ? reader.result : "");
+    };
+    reader.onerror = () => setResponse("Failed to read file");
+    reader.readAsDataURL(file);
+  };
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
