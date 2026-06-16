@@ -16,6 +16,13 @@ function json(body: unknown, status = 200) {
   });
 }
 
+function currentMonth(): string {
+  const d = new Date();
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+
 export const Route = createFileRoute("/api/v1/extract")({
   server: {
     handlers: {
@@ -50,13 +57,30 @@ export const Route = createFileRoute("/api/v1/extract")({
 
         const { data: tenant, error: tenantErr } = await supabaseAdmin
           .from("tenants")
-          .select("id, status")
+          .select("id, status, monthly_limit")
           .eq("api_key", apiKey)
           .maybeSingle();
 
         if (tenantErr) return json({ error: "Lookup failed" }, 500);
         if (!tenant) return json({ error: "Invalid api_key" }, 401);
         if (tenant.status !== "active") return json({ error: "Tenant is disabled" }, 403);
+
+        const month = currentMonth();
+        const limit = (tenant as { monthly_limit: number | null }).monthly_limit ?? 0;
+
+        const { data: usage, error: usageErr } = await supabaseAdmin
+          .from("tenant_usage")
+          .select("extraction_count")
+          .eq("tenant_id", tenant.id)
+          .eq("usage_month", month)
+          .maybeSingle();
+
+        if (usageErr) return json({ error: "Usage lookup failed" }, 500);
+
+        const used = usage?.extraction_count ?? 0;
+        if (limit > 0 && used >= limit) {
+          return json({ error: "Monthly limit exceeded" }, 429);
+        }
 
         const { extractCore } = await import("@/lib/extract-core.server");
         let result;
@@ -89,8 +113,16 @@ export const Route = createFileRoute("/api/v1/extract")({
           .single();
 
         if (insertErr) {
-          // Still return extraction to caller; log server-side.
           console.error("extractions insert failed", insertErr);
+        } else {
+          const { error: rpcErr } = await supabaseAdmin.rpc("increment_usage", {
+            p_tenant_id: tenant.id,
+            p_month: month,
+            p_count: parsed.data.images.length,
+          });
+          if (rpcErr) {
+            console.error("increment_usage failed", rpcErr);
+          }
         }
 
         return json({

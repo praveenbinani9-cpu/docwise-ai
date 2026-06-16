@@ -52,11 +52,47 @@ export type Database = {
           },
         ]
       }
+      tenant_usage: {
+        Row: {
+          created_at: string
+          extraction_count: number
+          id: string
+          tenant_id: string
+          updated_at: string
+          usage_month: string
+        }
+        Insert: {
+          created_at?: string
+          extraction_count?: number
+          id?: string
+          tenant_id: string
+          updated_at?: string
+          usage_month: string
+        }
+        Update: {
+          created_at?: string
+          extraction_count?: number
+          id?: string
+          tenant_id?: string
+          updated_at?: string
+          usage_month?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_usage_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tenants: {
         Row: {
           api_key: string
           created_at: string
           id: string
+          monthly_limit: number
           name: string
           status: string
         }
@@ -64,6 +100,7 @@ export type Database = {
           api_key: string
           created_at?: string
           id?: string
+          monthly_limit?: number
           name: string
           status?: string
         }
@@ -71,6 +108,7 @@ export type Database = {
           api_key?: string
           created_at?: string
           id?: string
+          monthly_limit?: number
           name?: string
           status?: string
         }
@@ -81,7 +119,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      increment_usage: {
+        Args: { p_count?: number; p_month: string; p_tenant_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
