@@ -78,6 +78,18 @@ function ApiTestPage() {
               required
             />
           </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium">Or upload image file</label>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={onFileChange}
+              className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              The file is converted to a base64 data URL in your browser before being sent.
+            </p>
+          </div>
           <button
             type="submit"
             disabled={loading}
@@ -86,6 +98,7 @@ function ApiTestPage() {
             {loading ? "Submitting…" : "Submit"}
           </button>
         </form>
+
 
         {response && (
           <pre className="mt-6 overflow-auto rounded-lg border border-border bg-surface p-4 font-mono text-xs">
