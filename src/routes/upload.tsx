@@ -43,7 +43,7 @@ async function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-async function pdfToImages(file: File, maxPages = 3): Promise<string[]> {
+async function pdfToImages(file: File): Promise<string[]> {
   const pdfjs = await import("pdfjs-dist");
   // Use a CDN worker to avoid bundling issues
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -51,7 +51,7 @@ async function pdfToImages(file: File, maxPages = 3): Promise<string[]> {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjs.getDocument({ data: buf }).promise;
   const out: string[] = [];
-  const pages = Math.min(pdf.numPages, maxPages);
+  const pages = pdf.numPages;
   for (let i = 1; i <= pages; i++) {
     const page = await pdf.getPage(i);
     const viewport = page.getViewport({ scale: 2 });
