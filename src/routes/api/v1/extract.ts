@@ -118,7 +118,7 @@ async function parseRequest(
         return { error: `Unsupported file type: ${file.type}. Allowed: JPG, PNG, WEBP.`, status: 400 };
       }
       if (file.size > 4 * 1024 * 1024) {
-        return { error: `File "${file.name}" exceeds 4 MB limit.`, status: 400 };
+        return { error: `File "${file.name}" exceeds 10 MB limit.`, status: 400 };
       }
     }
 
