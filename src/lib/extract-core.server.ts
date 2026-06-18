@@ -81,6 +81,11 @@ Schema:
 - Numbers must be JSON numbers, never strings.
 - Strings: trim whitespace; preserve original casing.
 - If the document is unreadable, return a valid JSON object with document_type best-guess, all other fields null, overall_confidence below 0.3, and at least one warning explaining why.
+# Multi-invoice documents (CRITICAL)
+- A single PDF or image set may contain MORE THAN ONE invoice/document (e.g. three separate invoices stitched into one PDF, or per-page invoices).
+- Detect distinct documents by separate headers, separate invoice numbers, separate seller/buyer blocks, separate totals, or visual page boundaries.
+- If you find ONE document, return a single JSON object as specified above.
+- If you find TWO OR MORE documents, return: { "documents": [ <object1>, <object2>, ... ] } where each element follows the full schema above. Do NOT merge line items across different invoices.
 Output JSON only.`;
 
 export type ExtractCoreResult = {
