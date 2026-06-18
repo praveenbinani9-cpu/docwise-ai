@@ -181,7 +181,9 @@ function normalizeGstTaxes(parsed: unknown): unknown {
   const sellerStateCode = firstStateCode(seller);
   const buyerStateCode = firstStateCode(buyer);
   const stateTaxType = sellerStateCode && buyerStateCode ? (sellerStateCode === buyerStateCode ? "cgst_sgst" : "igst") : null;
-  const chosenTaxType = totalTaxType(totals) ?? lineTaxType(root.line_items) ?? stateTaxType;
+  const observedTaxType = totalTaxType(totals) ?? lineTaxType(root.line_items);
+  const chosenTaxType =
+    observedTaxType === "igst" ? "igst" : stateTaxType === "igst" ? "igst" : stateTaxType ?? observedTaxType;
 
   if (chosenTaxType === "igst") {
     if (totals) {
