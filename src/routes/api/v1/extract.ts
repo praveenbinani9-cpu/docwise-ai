@@ -201,14 +201,20 @@ export const Route = createFileRoute("/api/v1/extract")({
 
         // ── Save to DB ──
         const parsedJson = result.parsed as Record<string, unknown> | null;
+        const documentsArr = Array.isArray(parsedJson?.documents)
+          ? (parsedJson!.documents as Array<Record<string, unknown>>)
+          : null;
+        const primary = documentsArr && documentsArr.length > 0 ? documentsArr[0] : parsedJson;
+
         const document_type =
-          parsedJson && typeof parsedJson["document_type"] === "string"
-            ? (parsedJson["document_type"] as string)
+          primary && typeof primary["document_type"] === "string"
+            ? (primary["document_type"] as string)
             : null;
         const overall_confidence =
-          parsedJson && typeof parsedJson["overall_confidence"] === "number"
-            ? (parsedJson["overall_confidence"] as number)
+          primary && typeof primary["overall_confidence"] === "number"
+            ? (primary["overall_confidence"] as number)
             : null;
+        const docCount = documentsArr ? documentsArr.length : images.length;
 
         const { data: inserted, error: insertErr } = await supabaseAdmin
           .from("extractions")
@@ -216,7 +222,7 @@ export const Route = createFileRoute("/api/v1/extract")({
             tenant_id: tenant.id,
             document_type,
             overall_confidence,
-            page_count: images.length,
+            page_count: docCount,
             result: (parsedJson ?? {}) as never,
           })
           .select("id, created_at")
@@ -228,7 +234,7 @@ export const Route = createFileRoute("/api/v1/extract")({
           const { error: rpcErr } = await supabaseAdmin.rpc("increment_usage", {
             p_tenant_id: tenant.id,
             p_month: month,
-            p_count: images.length,
+            p_count: docCount,
           });
           if (rpcErr) console.error("increment_usage failed", rpcErr);
         }
