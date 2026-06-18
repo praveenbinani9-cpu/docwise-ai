@@ -345,13 +345,141 @@ function normalizeGstTaxes(parsed: unknown): unknown {
   return root;
 }
 
+const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+
+export function validateGSTIN(gstin: string | null | undefined): boolean {
+  if (!gstin) return false;
+  return GSTIN_REGEX.test(gstin.trim().toUpperCase());
+}
+
+export function getGSTINStateCode(gstin: string | null | undefined): string | null {
+  if (!gstin || !validateGSTIN(gstin)) return null;
+  return gstin.trim().substring(0, 2);
+}
+
+export const GST_STATE_CODES: Record<string, string> = {
+  "01": "Jammu & Kashmir", "02": "Himachal Pradesh", "03": "Punjab", "04": "Chandigarh",
+  "05": "Uttarakhand", "06": "Haryana", "07": "Delhi", "08": "Rajasthan",
+  "09": "Uttar Pradesh", "10": "Bihar", "11": "Sikkim", "12": "Arunachal Pradesh",
+  "13": "Nagaland", "14": "Manipur", "15": "Mizoram", "16": "Tripura",
+  "17": "Meghalaya", "18": "Assam", "19": "West Bengal", "20": "Jharkhand",
+  "21": "Odisha", "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat",
+  "26": "Dadra & Nagar Haveli and Daman & Diu", "27": "Maharashtra",
+  "28": "Andhra Pradesh", "29": "Karnataka", "30": "Goa", "31": "Lakshadweep",
+  "32": "Kerala", "33": "Tamil Nadu", "34": "Puducherry",
+  "35": "Andaman & Nicobar Islands", "36": "Telangana", "37": "Andhra Pradesh (New)",
+  "38": "Ladakh", "97": "Other Territory", "99": "Centre Jurisdiction",
+};
+
+function applyGstinValidation(parsed: unknown): unknown {
+  const root = toObject(parsed);
+  if (!root) return parsed;
+  const seller = toObject(root.seller);
+  const buyer = toObject(root.buyer);
+  const sellerGstin = typeof seller?.gstin === "string" ? seller.gstin : null;
+  const buyerGstin = typeof buyer?.gstin === "string" ? buyer.gstin : null;
+  const sellerValid = validateGSTIN(sellerGstin);
+  const buyerValid = buyerGstin ? validateGSTIN(buyerGstin) : true;
+
+  root.gstin_seller_valid = sellerValid;
+  root.gstin_buyer_valid = buyerValid;
+
+  const validation = toObject(root.validation) ?? {};
+  validation.gstin_seller_valid = sellerValid;
+  validation.gstin_buyer_valid = buyerValid;
+  const warnings: string[] = Array.isArray(validation.warnings) ? (validation.warnings as string[]) : [];
+  const pushWarn = (w: string) => { if (!warnings.includes(w)) warnings.push(w); };
+
+  if (sellerGstin && !sellerValid) pushWarn("GSTIN seller format invalid — verify manually");
+  if (buyerGstin && !buyerValid) pushWarn("GSTIN buyer format invalid — verify manually");
+
+  // Seller GSTIN state code vs seller address state mismatch
+  const sellerCode = getGSTINStateCode(sellerGstin);
+  const sellerAddrState = typeof seller?.state === "string" ? seller.state.trim() : "";
+  if (sellerCode && sellerAddrState && GST_STATE_CODES[sellerCode]) {
+    const expected = GST_STATE_CODES[sellerCode].toLowerCase();
+    if (!sellerAddrState.toLowerCase().includes(expected.split(" ")[0])) {
+      pushWarn(`Seller GSTIN state code ${sellerCode} does not match seller address state`);
+    }
+  }
+
+  // per_field_confidence: clamp GSTIN confidences when invalid
+  const pfc = toObject(root.per_field_confidence) ?? {};
+  if (sellerGstin && !sellerValid) {
+    const c = toNumber(pfc.seller_gstin);
+    pfc.seller_gstin = c === null ? 0.6 : Math.min(c, 0.6);
+  }
+  if (buyerGstin && !buyerValid) {
+    const c = toNumber(pfc.buyer_gstin);
+    pfc.buyer_gstin = c === null ? 0.6 : Math.min(c, 0.6);
+  }
+  root.per_field_confidence = pfc;
+
+  // Validation presence flags
+  const totals = toObject(root.totals);
+  const transport = toObject(root.transport_details) ?? toObject(root.transport);
+  const bank = toObject(root.bank_details);
+  const taxable = toNumber(totals?.taxable_amount) ?? 0;
+  const ewayNo = transport ? (transport.eway_bill_number ?? transport.eway_bill_no) : null;
+  validation.bank_details_present = !!bank;
+  validation.transport_details_present = !!transport;
+  validation.eway_bill_required = taxable > 50000 && !!transport;
+  if (taxable > 50000 && !ewayNo) pushWarn("E-way bill missing — taxable amount exceeds ₹50,000");
+
+  // Compute total_tax and compare against any printed footer value
+  if (totals) {
+    const computed =
+      positiveNumber(totals.cgst) + positiveNumber(totals.sgst) +
+      positiveNumber(totals.igst) + positiveNumber(totals.cess);
+    const printed = toNumber(totals.total_tax);
+    if (printed !== null && Math.abs(printed - computed) > 1) {
+      pushWarn("total_tax mismatch — footer value differs from computed CGST+SGST+IGST");
+    }
+    totals.total_tax = Number(computed.toFixed(2));
+  }
+
+  // Line item amount verification
+  let allItemsOk = true;
+  if (Array.isArray(root.line_items)) {
+    for (const item of root.line_items) {
+      const row = toObject(item);
+      if (!row) continue;
+      const qty = toNumber(row.quantity);
+      const rate = toNumber(row.rate);
+      const discount = positiveNumber(row.discount);
+      const amount = toNumber(row.taxable_amount) ?? toNumber(row.amount);
+      if (qty !== null && rate !== null && amount !== null) {
+        const expected = Math.round(qty * rate) - discount;
+        if (Math.abs(expected - amount) > 1) {
+          allItemsOk = false;
+          const sr = row.sr_no ?? "?";
+          pushWarn(`Line item amount inconsistency on item #${sr} — extracted qty×rate ≠ amount`);
+        }
+      }
+    }
+  }
+  validation.line_items_amount_verified = allItemsOk;
+
+  validation.warnings = warnings;
+  root.validation = validation;
+
+  // Backward-compat: compute overall_confidence from per_field_confidence average
+  // so the /api/v1/extract route continues to populate the column.
+  const pfcValues = Object.values(pfc).map((v) => toNumber(v)).filter((v): v is number => v !== null);
+  if (pfcValues.length > 0) {
+    root.overall_confidence = Number((pfcValues.reduce((a, b) => a + b, 0) / pfcValues.length).toFixed(2));
+  }
+
+  return root;
+}
+
 function normalizeResponse(parsed: unknown): unknown {
   const root = toObject(parsed);
   if (root && Array.isArray(root.documents)) {
-    root.documents = root.documents.map((doc) => normalizeGstTaxes(doc));
+    root.documents = root.documents.map((doc) => applyGstinValidation(normalizeGstTaxes(doc)));
     return root;
   }
-  return normalizeGstTaxes(parsed);
+  return applyGstinValidation(normalizeGstTaxes(parsed));
 }
 
 function isPdfDataUri(url: string): boolean {
