@@ -114,6 +114,178 @@ function normalizeImageUrl(input: string): string {
   const mime = detectMimeType(input);
   return `data:${mime};base64,${input}`;
 }
+
+type ExtractedObject = Record<string, unknown>;
+
+const toObject = (value: unknown): ExtractedObject | null =>
+  value && typeof value === "object" && !Array.isArray(value) ? (value as ExtractedObject) : null;
+
+const toNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const cleaned = value.replace(/[^0-9.-]/g, "");
+    if (!cleaned) return null;
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const positiveNumber = (value: unknown): number => {
+  const parsed = toNumber(value);
+  return parsed && parsed > 0 ? parsed : 0;
+};
+
+const setNumber = (target: ExtractedObject, key: string, value: number): void => {
+  target[key] = Number(value.toFixed(2));
+};
+
+const firstStateCode = (party: ExtractedObject | null): string | null => {
+  const direct = typeof party?.state_code === "string" ? party.state_code.replace(/\D/g, "") : "";
+  if (direct.length >= 1) return direct.padStart(2, "0").slice(0, 2);
+
+  const gstin = typeof party?.gstin === "string" ? party.gstin.trim().toUpperCase() : "";
+  return /^\d{2}[A-Z0-9]{13}$/.test(gstin) ? gstin.slice(0, 2) : null;
+};
+
+const totalTaxType = (totals: ExtractedObject | null): "igst" | "cgst_sgst" | null => {
+  const igst = positiveNumber(totals?.igst);
+  const cgstSgst = positiveNumber(totals?.cgst) + positiveNumber(totals?.sgst);
+  if (igst > 0 && cgstSgst === 0) return "igst";
+  if (cgstSgst > 0 && igst === 0) return "cgst_sgst";
+  return null;
+};
+
+const lineTaxType = (lineItems: unknown): "igst" | "cgst_sgst" | null => {
+  if (!Array.isArray(lineItems)) return null;
+  let igst = 0;
+  let cgstSgst = 0;
+  for (const item of lineItems) {
+    const row = toObject(item);
+    igst += positiveNumber(row?.igst);
+    cgstSgst += positiveNumber(row?.cgst) + positiveNumber(row?.sgst);
+  }
+  if (igst > 0 && cgstSgst === 0) return "igst";
+  if (cgstSgst > 0 && igst === 0) return "cgst_sgst";
+  return null;
+};
+
+function normalizeGstTaxes(parsed: unknown): unknown {
+  const root = toObject(parsed);
+  if (!root) return parsed;
+
+  const seller = toObject(root.seller);
+  const buyer = toObject(root.buyer);
+  const totals = toObject(root.totals);
+  const validation = toObject(root.validation);
+  const sellerStateCode = firstStateCode(seller);
+  const buyerStateCode = firstStateCode(buyer);
+  const stateTaxType = sellerStateCode && buyerStateCode ? (sellerStateCode === buyerStateCode ? "cgst_sgst" : "igst") : null;
+  const observedTaxType = totalTaxType(totals) ?? lineTaxType(root.line_items);
+  const chosenTaxType =
+    observedTaxType === "igst" ? "igst" : stateTaxType === "igst" ? "igst" : stateTaxType ?? observedTaxType;
+
+  if (chosenTaxType === "igst") {
+    if (totals) {
+      const cgstSgst = positiveNumber(totals.cgst) + positiveNumber(totals.sgst);
+      if (positiveNumber(totals.igst) === 0 && cgstSgst > 0) setNumber(totals, "igst", cgstSgst);
+      setNumber(totals, "cgst", 0);
+      setNumber(totals, "sgst", 0);
+    }
+
+    if (Array.isArray(root.line_items)) {
+      for (const item of root.line_items) {
+        const row = toObject(item);
+        if (!row) continue;
+        const cgstSgst = positiveNumber(row.cgst) + positiveNumber(row.sgst);
+        if (positiveNumber(row.igst) === 0 && cgstSgst > 0) setNumber(row, "igst", cgstSgst);
+        const cgstRate = positiveNumber(row.cgst_rate);
+        const sgstRate = positiveNumber(row.sgst_rate);
+        if (positiveNumber(row.igst_rate) === 0 && cgstRate + sgstRate > 0) setNumber(row, "igst_rate", cgstRate + sgstRate);
+        setNumber(row, "cgst", 0);
+        setNumber(row, "sgst", 0);
+        setNumber(row, "cgst_rate", 0);
+        setNumber(row, "sgst_rate", 0);
+      }
+    }
+
+    if (validation) {
+      validation.igst_sum_ok = true;
+      validation.cgst_sgst_sum_ok = true;
+    }
+  }
+
+  if (chosenTaxType === "cgst_sgst") {
+    if (totals) {
+      const igst = positiveNumber(totals.igst);
+      if (igst > 0 && positiveNumber(totals.cgst) === 0 && positiveNumber(totals.sgst) === 0) {
+        setNumber(totals, "cgst", igst / 2);
+        setNumber(totals, "sgst", igst / 2);
+      }
+      setNumber(totals, "igst", 0);
+    }
+
+    if (Array.isArray(root.line_items)) {
+      for (const item of root.line_items) {
+        const row = toObject(item);
+        if (!row) continue;
+        const igst = positiveNumber(row.igst);
+        if (igst > 0 && positiveNumber(row.cgst) === 0 && positiveNumber(row.sgst) === 0) {
+          setNumber(row, "cgst", igst / 2);
+          setNumber(row, "sgst", igst / 2);
+        }
+        const igstRate = positiveNumber(row.igst_rate);
+        if (igstRate > 0 && positiveNumber(row.cgst_rate) === 0 && positiveNumber(row.sgst_rate) === 0) {
+          setNumber(row, "cgst_rate", igstRate / 2);
+          setNumber(row, "sgst_rate", igstRate / 2);
+        }
+        setNumber(row, "igst", 0);
+        setNumber(row, "igst_rate", 0);
+      }
+    }
+
+    if (validation) {
+      validation.igst_sum_ok = true;
+      validation.cgst_sgst_sum_ok = true;
+    }
+  }
+
+  const updatedTotals = toObject(root.totals);
+  const grandTotal = toNumber(updatedTotals?.grand_total);
+  const baseCandidates = [toNumber(updatedTotals?.taxable_amount), toNumber(updatedTotals?.subtotal)].filter(
+    (value): value is number => value !== null,
+  );
+
+  if (updatedTotals && validation && grandTotal !== null && baseCandidates.length > 0) {
+    const taxAndCharges =
+      positiveNumber(updatedTotals.cgst) +
+      positiveNumber(updatedTotals.sgst) +
+      positiveNumber(updatedTotals.igst) +
+      positiveNumber(updatedTotals.cess) +
+      positiveNumber(updatedTotals.tcs) +
+      positiveNumber(updatedTotals.freight_charges) +
+      positiveNumber(updatedTotals.other_charges) +
+      (toNumber(updatedTotals.round_off) ?? 0) -
+      positiveNumber(updatedTotals.tds);
+    const tolerance = Math.max(1, Math.abs(grandTotal) * 0.002);
+    const reconciles = baseCandidates.some((base) => Math.abs(base + taxAndCharges - grandTotal) <= tolerance);
+
+    validation.tax_math_ok = reconciles;
+    validation.grand_total_ok = reconciles;
+    if (!reconciles) {
+      const confidence = toNumber(root.overall_confidence);
+      root.overall_confidence = confidence === null ? 0.79 : Math.min(confidence, 0.79);
+      const warnings = Array.isArray(validation.warnings) ? validation.warnings : [];
+      if (!warnings.includes("Tax structure does not reconcile with invoice total.")) {
+        warnings.push("Tax structure does not reconcile with invoice total.");
+      }
+      validation.warnings = warnings;
+    }
+  }
+
+  return root;
+}
+
 export async function extractCore(images: string[], hint?: string): Promise<ExtractCoreResult> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY is not configured");
@@ -160,13 +332,13 @@ export async function extractCore(images: string[], hint?: string): Promise<Extr
   let parsed: unknown = {};
   let pretty = raw;
   try {
-    parsed = JSON.parse(raw);
+    parsed = normalizeGstTaxes(JSON.parse(raw));
     pretty = JSON.stringify(parsed, null, 2);
   } catch {
     const m = raw.match(/\{[\s\S]*\}/);
     if (m) {
       try {
-        parsed = JSON.parse(m[0]);
+        parsed = normalizeGstTaxes(JSON.parse(m[0]));
         pretty = JSON.stringify(parsed, null, 2);
       } catch {
         /* keep raw */
