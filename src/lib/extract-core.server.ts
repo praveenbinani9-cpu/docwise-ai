@@ -81,6 +81,11 @@ Schema:
 - Numbers must be JSON numbers, never strings.
 - Strings: trim whitespace; preserve original casing.
 - If the document is unreadable, return a valid JSON object with document_type best-guess, all other fields null, overall_confidence below 0.3, and at least one warning explaining why.
+# Multi-invoice documents (CRITICAL)
+- A single PDF or image set may contain MORE THAN ONE invoice/document (e.g. three separate invoices stitched into one PDF, or per-page invoices).
+- Detect distinct documents by separate headers, separate invoice numbers, separate seller/buyer blocks, separate totals, or visual page boundaries.
+- If you find ONE document, return a single JSON object as specified above.
+- If you find TWO OR MORE documents, return: { "documents": [ <object1>, <object2>, ... ] } where each element follows the full schema above. Do NOT merge line items across different invoices.
 Output JSON only.`;
 
 export type ExtractCoreResult = {
@@ -286,7 +291,20 @@ function normalizeGstTaxes(parsed: unknown): unknown {
   return root;
 }
 
-export async function extractCore(images: string[], hint?: string): Promise<ExtractCoreResult> {
+function normalizeResponse(parsed: unknown): unknown {
+  const root = toObject(parsed);
+  if (root && Array.isArray(root.documents)) {
+    root.documents = root.documents.map((doc) => normalizeGstTaxes(doc));
+    return root;
+  }
+  return normalizeGstTaxes(parsed);
+}
+
+function isPdfDataUri(url: string): boolean {
+  return url.startsWith("data:application/pdf");
+}
+
+async function callGroqVision(images: string[], hint?: string): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY is not configured");
 
@@ -297,22 +315,17 @@ export async function extractCore(images: string[], hint?: string): Promise<Extr
     },
     ...images.map((url) => ({
       type: "image_url",
-      image_url: {
-        url: normalizeImageUrl(url),
-    },
+      image_url: { url: normalizeImageUrl(url) },
     })),
   ];
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "meta-llama/llama-4-scout-17b-16e-instruct",
       temperature: 0,
-      max_tokens: 4096,
+      max_tokens: 8192,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
@@ -325,20 +338,74 @@ export async function extractCore(images: string[], hint?: string): Promise<Extr
     const text = await res.text();
     throw new Error(`Groq API error ${res.status}: ${text.slice(0, 500)}`);
   }
-
   const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-  const raw = json.choices?.[0]?.message?.content ?? "{}";
+  return json.choices?.[0]?.message?.content ?? "{}";
+}
+
+async function callGeminiPdf(images: string[], hint?: string): Promise<string> {
+  const apiKey = process.env.LOVABLE_API_KEY;
+  if (!apiKey) throw new Error("LOVABLE_API_KEY is not configured");
+
+  const parts: Array<Record<string, unknown>> = [
+    {
+      type: "text",
+      text: `Extract structured data from this document.${hint ? " Hint: " + hint : ""} If multiple invoices/documents are present, return { "documents": [...] }. Return JSON only.`,
+    },
+  ];
+
+  for (const url of images) {
+    const dataUri = url.startsWith("data:") ? url : normalizeImageUrl(url);
+    if (dataUri.startsWith("data:application/pdf")) {
+      parts.push({
+        type: "file",
+        file: { filename: "document.pdf", file_data: dataUri },
+      });
+    } else {
+      parts.push({ type: "image_url", image_url: { url: dataUri } });
+    }
+  }
+
+  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: parts },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`AI gateway error ${res.status}: ${text.slice(0, 500)}`);
+  }
+  const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+  return json.choices?.[0]?.message?.content ?? "{}";
+}
+
+export async function extractCore(images: string[], hint?: string): Promise<ExtractCoreResult> {
+  const hasPdf = images.some((url) => {
+    if (url.startsWith("data:")) return isPdfDataUri(url);
+    return detectMimeType(url) === "application/pdf";
+  });
+
+  // PDFs go through Gemini (native multi-page PDF support); images via Groq.
+  const raw = hasPdf ? await callGeminiPdf(images, hint) : await callGroqVision(images, hint);
 
   let parsed: unknown = {};
   let pretty = raw;
   try {
-    parsed = normalizeGstTaxes(JSON.parse(raw));
+    parsed = normalizeResponse(JSON.parse(raw));
     pretty = JSON.stringify(parsed, null, 2);
   } catch {
     const m = raw.match(/\{[\s\S]*\}/);
     if (m) {
       try {
-        parsed = normalizeGstTaxes(JSON.parse(m[0]));
+        parsed = normalizeResponse(JSON.parse(m[0]));
         pretty = JSON.stringify(parsed, null, 2);
       } catch {
         /* keep raw */
