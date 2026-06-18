@@ -112,10 +112,10 @@ async function parseRequest(
     if (files.length > 8)   return { error: "Maximum 8 images per request.", status: 400 };
 
     // Validate file types
-    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"];
     for (const file of files) {
       if (file.type && !allowed.includes(file.type)) {
-        return { error: `Unsupported file type: ${file.type}. Allowed: JPG, PNG, WEBP.`, status: 400 };
+        return { error: `Unsupported file type: ${file.type}. Allowed: JPG, PNG, WEBP, PDF.`, status: 400 };
       }
       if (file.size > 4 * 1024 * 1024) {
         return { error: `File "${file.name}" exceeds 10 MB limit.`, status: 400 };
