@@ -45,23 +45,29 @@ async function fileToDataUrl(file: File): Promise<string> {
 
 async function pdfToImages(file: File): Promise<string[]> {
   const pdfjs = await import("pdfjs-dist");
-  // Use a CDN worker to avoid bundling issues
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (pdfjs as any).GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+  (pdfjs as any).GlobalWorkerOptions.workerSrc = 
+    `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+  
   const buf = await file.arrayBuffer();
   const pdf = await pdfjs.getDocument({ data: buf }).promise;
   const out: string[] = [];
-  const pages = pdf.numPages;
-  for (let i = 1; i <= pages; i++) {
+
+  for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
-    const viewport = page.getViewport({ scale: 2 });
+
+    // Scale down: fit within 1200px wide max
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(1.5, 1200 / base.width); // was hardcoded 2
+    const viewport = page.getViewport({ scale });
+
     const canvas = document.createElement("canvas");
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     const ctx = canvas.getContext("2d")!;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
-    out.push(canvas.toDataURL("image/png"));
+    await page.render({ canvasContext: ctx, viewport } as any).promise;
+
+    // JPEG at 0.85 quality instead of PNG — ~70% smaller
+    out.push(canvas.toDataURL("image/jpeg", 0.85));
   }
   return out;
 }
