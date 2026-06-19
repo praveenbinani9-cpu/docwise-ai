@@ -453,29 +453,47 @@ async function callGroqVision(images: string[], hint?: string): Promise<string> 
     })),
   ];
 
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      temperature: 0,
-      top_p: 1,
-      seed: 7,
-      max_tokens: 8192,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content },
-      ],
-    }),
+  const body = JSON.stringify({
+    model: "meta-llama/llama-4-scout-17b-16e-instruct",
+    temperature: 0,
+    top_p: 1,
+    seed: 7,
+    max_tokens: 8192,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content },
+    ],
   });
 
-  if (!res.ok) {
+  let lastErr = "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body,
+    });
+
+    if (res.ok) {
+      const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+      return json.choices?.[0]?.message?.content ?? "{}";
+    }
+
     const text = await res.text();
-    throw new Error(`Groq API error ${res.status}: ${text.slice(0, 500)}`);
+    lastErr = `Groq API error ${res.status}: ${text.slice(0, 500)}`;
+    if (res.status !== 429 && res.status < 500) break;
+
+    // Parse retry delay from message ("try again in 12.848s") or Retry-After header.
+    let waitMs = 0;
+    const retryAfter = res.headers.get("retry-after");
+    if (retryAfter) waitMs = Math.ceil(parseFloat(retryAfter) * 1000);
+    const m = text.match(/try again in ([\d.]+)s/i);
+    if (m) waitMs = Math.max(waitMs, Math.ceil(parseFloat(m[1]) * 1000));
+    if (!waitMs) waitMs = 2000 * (attempt + 1);
+    waitMs = Math.min(waitMs + 500, 30000);
+    await new Promise((r) => setTimeout(r, waitMs));
   }
-  const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-  return json.choices?.[0]?.message?.content ?? "{}";
+  throw new Error(lastErr || "Groq API failed");
 }
 
 async function callGeminiPdf(images: string[], hint?: string): Promise<string> {
