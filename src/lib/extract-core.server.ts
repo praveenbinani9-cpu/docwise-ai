@@ -459,6 +459,8 @@ async function callGroqVision(images: string[], hint?: string): Promise<string> 
     body: JSON.stringify({
       model: "meta-llama/llama-4-scout-17b-16e-instruct",
       temperature: 0,
+      top_p: 1,
+      seed: 7,
       max_tokens: 8192,
       response_format: { type: "json_object" },
       messages: [
