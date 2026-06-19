@@ -664,11 +664,12 @@ export async function extractCore(images: string[], hint?: string): Promise<Extr
   let parsed: unknown;
 
   if (!hasPdf && images.length > 1) {
-    // Process each image independently to prevent cross-page contamination,
-    // then merge into a multi-document envelope. Run in parallel.
-    const perImage = await Promise.all(
-      images.map(async (img) => normalizeResponse(parseJsonLoose(await callGroqVision([img], hint)))),
-    );
+    // Process each image independently to prevent cross-page contamination.
+    // Run sequentially to stay under provider TPM rate limits.
+    const perImage: unknown[] = [];
+    for (const img of images) {
+      perImage.push(normalizeResponse(parseJsonLoose(await callGroqVision([img], hint))));
+    }
     const docs: unknown[] = [];
     for (const r of perImage) {
       const o = toObject(r);
@@ -676,14 +677,14 @@ export async function extractCore(images: string[], hint?: string): Promise<Extr
       else if (o) docs.push(o);
     }
     parsed = docs.length === 1 ? docs[0] : { documents: docs };
+    // Skip the consistency double-pass in multi-image mode to avoid TPM exhaustion.
+    parsed = postProcess(parsed, null);
   } else {
     const raw = hasPdf ? await callGeminiPdf(images, hint) : await callGroqVision(images, hint);
     parsed = normalizeResponse(parseJsonLoose(raw));
+    const secondary = await verifyCriticalFields(images, hasPdf, hint);
+    parsed = postProcess(parsed, secondary);
   }
-
-  // Consistency double-pass for critical fields (best-effort; ignored on failure).
-  const secondary = await verifyCriticalFields(images, hasPdf, hint);
-  parsed = postProcess(parsed, secondary);
 
   const pretty = JSON.stringify(parsed, null, 2);
   return { json: pretty, parsed };
