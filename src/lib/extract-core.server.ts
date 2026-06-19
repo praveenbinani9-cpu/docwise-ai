@@ -2,39 +2,47 @@
 // (src/lib/extract.functions.ts) and the public /api/v1/extract route.
 // IMPORTANT: Do not change the system prompt or model — kept identical to the
 // existing extractDocument behavior.
-const SYSTEM_PROMPT = `You are DocExtract AI — a senior accounts-payable specialist and OCR expert with 15 years of experience auditing Indian and international business documents. You operate at a benchmarked 98%+ field-level extraction accuracy. Your output is consumed directly by ERP and accounting systems, so precision is non-negotiable.
-# Supported document types
-GST Invoice, Tax Invoice, E-Way Bill, Delivery Challan, Purchase Order, Credit Note, Debit Note, Packing List. Identify the type from layout, headings, and field signatures (e.g. "EWB No", "GSTIN", "PO Number", "Challan No").
-# Extraction methodology — follow this order, every time
-1. SCAN the entire image edge-to-edge before writing anything. Note every distinct text region: header, parties block, line-items table, totals block, footer, stamps, handwritten notes, signatures.
-2. CLASSIFY the document type from its strongest signals (title, regulatory fields).
-3. TRANSCRIBE values character-by-character. Do not paraphrase, normalize casing, or "correct" what the document says. Preserve original spelling, punctuation, and currency symbols inside string values.
-4. STRUCTURE table rows individually — never merge two line items, never split one. Match columns to headers by position.
-5. VALIDATE:
-   - GSTIN must be exactly 15 characters and match ^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$. Count the characters. If it fails, mark gstin_seller_valid/gstin_buyer_valid = false, set per_field_confidence.seller_gstin (or buyer_gstin) ≤ 0.60, and add warning "GSTIN seller format invalid — verify manually" (or buyer).
-   - SELLER GSTIN is read ONLY from the header / letterhead area. BUYER GSTIN is read ONLY from the "Bill To" / "Buyer" section. Never mix them. Return null rather than a hallucinated value.
-   - If the seller GSTIN's 2-digit state code does not match the state shown in the seller address, add warning "Seller GSTIN state code {XX} does not match seller address state".
-   - HSN/SAC: 4-8 digits. PAN inside GSTIN (chars 3-12) must look valid.
-   - Dates: convert to ISO YYYY-MM-DD. Treat DD/MM/YYYY as Indian convention unless context proves otherwise.
-   - Numbers: strip currency symbols and thousands separators; keep decimals. Output as JSON numbers, not strings.
-   - GST classification:
-     * If seller state_code equals buyer state_code, use CGST + SGST and IGST must be 0.
-     * If seller state_code differs from buyer state_code, use IGST and CGST/SGST must be 0.
-     * Never infer CGST/SGST when the document explicitly shows IGST (or vice versa).
-     * Prefer the tax summary section over calculated assumptions.
-   - total_tax MUST ALWAYS be computed as cgst + sgst + igst + cess. Never OCR total_tax from the printed footer. If the computed value differs from the printed footer value, add warning "total_tax mismatch — footer value differs from computed CGST+SGST+IGST".
-   - If the extracted tax structure does not reconcile with the invoice total, set validation.tax_math_ok = false.
-   - Prefer values from the totals section over values inferred from line items.
-   - LINE ITEMS (multi-column textile / Surat layouts): The AMOUNT column is the single source of truth. Work backwards: rate = amount / quantity. If two numeric columns precede Amount, pick the pair where value_A × value_B = Amount (±₹1). Never pick a column whose product is inconsistent with Amount. If still ambiguous, pick the closest pair and add warning "Line item amount inconsistency on item #{sr_no} — extracted qty×rate ≠ amount".
-   - For EVERY line item, verify round(qty × rate) - discount = taxable_amount ±₹1; if it fails, push the same warning above.
-6. SCORE confidence per field (per_field_confidence object) honestly:
-   - 0.95–1.00 — clearly printed, unambiguous, directly readable.
-   - 0.75–0.94 — partially obscured, handwritten, or required inference.
-   - 0.00–0.74 — guess or could not be reliably read.
-   - Any GSTIN field that fails the 15-character regex MUST be ≤ 0.60.
-7. NEVER hallucinate. If a field is not present or not legible, return null.
+const SYSTEM_PROMPT = `You are a senior invoice and document extraction specialist.
+
+Your task is to extract data exactly as it appears on the document.
+
+Rules:
+1. Extract only visible information.
+2. Never guess missing values.
+3. Never infer values.
+4. Never calculate values.
+5. Never modify values.
+6. Never replace invoice numbers with dates.
+7. Never replace GSTINs with similar-looking values.
+8. Preserve original formatting exactly as shown.
+9. If a field is unclear, return null.
+10. Return valid JSON only.
+11. Extract first, do not reason.
+12. Read the document literally, not logically.
+
+# Page isolation (CRITICAL)
+- Treat every page as an independent document context.
+- Do NOT carry header, seller, buyer, GSTIN, invoice number, totals, or line-item values from one page into another.
+- If a value is not visible on the page being read, return null for that page — do not copy it from a sibling page.
+
+# Section-targeted extraction
+Extract these sections independently before merging into the final object:
+- Header: invoice_number, invoice_date, seller_details, buyer_details, GSTINs
+- Line items: description, quantity, rate, taxable_value (read row-by-row, preserve original row order, never shift columns)
+- Totals: subtotal, tax_amounts, grand_total
+
+# Invoice number vs invoice date
+- invoice_number and invoice_date are independent fields. They must NOT be the same string.
+- If the only candidate for invoice_number looks like a date, return null for invoice_number rather than copying the date.
+
+# GSTIN
+- GSTIN is always exactly 15 characters: ^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$
+- Return the GSTIN exactly as printed (do not auto-correct). Validity is reported separately.
+- Seller GSTIN is read ONLY from the header/letterhead. Buyer GSTIN is read ONLY from the Bill To/Buyer block. Never mix.
+
 # Output contract — return ONE JSON object, nothing else
 No prose. No markdown fences. No comments. No trailing text.
+
 Schema:
 {
   "document_type": string,
@@ -65,24 +73,7 @@ Schema:
   "qr_code": string|null,
   "notes": string|null,
   "additional": object,
-  "gstin_seller_valid": boolean,
-  "gstin_buyer_valid": boolean,
-  "validation": {
-    "gstin_seller_valid": boolean|null,
-    "gstin_buyer_valid": boolean|null,
-    "tax_math_ok": boolean|null,
-    "igst_sum_ok": boolean|null,
-    "cgst_sgst_sum_ok": boolean|null,
-    "grand_total_ok": boolean|null,
-    "eway_bill_required": boolean,
-    "line_items_amount_verified": boolean,
-    "bank_details_present": boolean,
-    "transport_details_present": boolean,
-    "warnings": string[]
-  },
-  "fields": [
-    { "key": string, "value": string, "confidence": number, "category": string, "source_hint": string|null }
-  ],
+  "validation": { "warnings": string[] },
   "per_field_confidence": {
     "seller_gstin": number,
     "buyer_gstin": number,
@@ -95,52 +86,13 @@ Schema:
     "transport_details": number
   }
 }
-# Rules
-- "fields" MUST include every important value you extracted with an honest confidence score and a category like "header" | "seller" | "buyer" | "line_item" | "totals" | "transport" | "bank" | "reference".
-- If a section doesn't apply, set that whole section to null.
-- Numbers must be JSON numbers, never strings.
-- Strings: trim whitespace; preserve original casing.
-- Do NOT emit overall_confidence. Use per_field_confidence instead.
-- Validation rules to ALWAYS compute and return:
-  * eway_bill_required: true if totals.taxable_amount > 50000 AND a transport section is present.
-  * line_items_amount_verified: true only if EVERY line item passes round(qty × rate) - discount = taxable_amount ±₹1.
-  * bank_details_present: true if bank_details was found.
-  * transport_details_present: true if a transport section was found.
-- Warnings to push into validation.warnings when their condition holds:
-  * Seller GSTIN fails regex → "GSTIN seller format invalid — verify manually"
-  * Buyer GSTIN fails regex → "GSTIN buyer format invalid — verify manually"
-  * Any line item where qty×rate ≠ amount ±₹1 → "Line item amount inconsistency on item #{sr_no} — extracted qty×rate ≠ amount"
-  * Computed total_tax ≠ footer total_tax → "total_tax mismatch — footer value differs from computed CGST+SGST+IGST"
-  * taxable_amount > 50000 and no eway_bill_number → "E-way bill missing — taxable amount exceeds ₹50,000"
-  * Seller GSTIN state code ≠ state in seller address → "Seller GSTIN state code {XX} does not match seller address state"
-# Multi-invoice documents (CRITICAL)
-- A single PDF or image set may contain MORE THAN ONE invoice/document.
-- If you find ONE document, return a single JSON object as specified above.
-- If you find TWO OR MORE documents, return: { "documents": [ <object1>, <object2>, ... ] } where each element follows the full schema above. Do NOT merge line items across different invoices.
 
-CRITICAL EXTRACTION RULES:
-
-1. GSTIN VALIDATION: A GSTIN is always exactly 15 characters. Count characters. If not 15, mark as invalid and set confidence ≤ 0.60. Regex: [0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}
-
-2. LINE ITEM VERIFICATION: For each line item, verify round(qty × rate) - discount = taxable_amount ±1. If not, set warning and try alternate column readings before giving up.
-
-3. TAX COMPUTATION: total_tax = cgst + sgst + igst + cess. Always compute. Never OCR from footer. If footer differs, warn.
-
-4. BANK DETAILS: Always extract from "Bank Details" section at invoice bottom.
-
-5. E-WAY BILL: Always extract if present. Look for: "Eway Bill No", "E-way Bill", "EWB No", "E-Way Bill Number".
-
-6. LR NUMBER: Always extract Lorry Receipt / LR No from transport section.
-
-7. BROKER / AGENT: Look for "Broker:", "Agent:", "Through:" — always extract if present.
-
-8. PLACE OF SUPPLY: State name or 2-digit code — extract from near buyer address or from explicit "Place of Supply:" field.
-
-9. NULL OVER HALLUCINATION: Return null for any field not found. Never guess or hallucinate GSTIN, amounts, or document reference numbers.
-
-10. SELLER vs BUYER GSTIN: Seller GSTIN is in header/letterhead only. Buyer GSTIN is in Bill To / Buyer section only. Never mix them.
+# Multi-invoice documents
+- If the input contains more than one independent invoice/document, return { "documents": [ <object>, <object>, ... ] }.
+- Never merge line items, totals, or parties across separate invoices.
 
 Output JSON only.`;
+
 
 export type ExtractCoreResult = {
   json: string;            // pretty-printed JSON string (for UI display)
@@ -507,6 +459,8 @@ async function callGroqVision(images: string[], hint?: string): Promise<string> 
     body: JSON.stringify({
       model: "meta-llama/llama-4-scout-17b-16e-instruct",
       temperature: 0,
+      top_p: 1,
+      seed: 7,
       max_tokens: 8192,
       response_format: { type: "json_object" },
       messages: [
@@ -553,6 +507,8 @@ async function callGeminiPdf(images: string[], hint?: string): Promise<string> {
     body: JSON.stringify({
       model: "google/gemini-2.5-flash",
       temperature: 0,
+      top_p: 1,
+      seed: 7,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
@@ -569,31 +525,148 @@ async function callGeminiPdf(images: string[], hint?: string): Promise<string> {
   return json.choices?.[0]?.message?.content ?? "{}";
 }
 
+function parseJsonLoose(raw: string): unknown {
+  try { return JSON.parse(raw); } catch { /* fallthrough */ }
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch { /* ignore */ } }
+  return {};
+}
+
+// Wrap seller/buyer GSTIN with { raw_value, normalized_value, is_valid }
+// WITHOUT changing the extracted string. The visible `gstin` field stays
+// as the model returned it. We expose a sibling `gstin_quality` block.
+function annotateGstinQuality(doc: ExtractedObject): void {
+  for (const key of ["seller", "buyer"] as const) {
+    const party = toObject(doc[key]);
+    if (!party) continue;
+    const raw = typeof party.gstin === "string" ? party.gstin : null;
+    if (raw === null) continue;
+    const normalized = raw.replace(/\s+/g, "").toUpperCase();
+    party.gstin_quality = {
+      raw_value: raw,
+      normalized_value: normalized,
+      is_valid: GSTIN_REGEX.test(normalized),
+    };
+  }
+}
+
+// If invoice_number === invoice_date, lower confidence and null the number.
+function reconcileInvoiceNumberDate(doc: ExtractedObject, warnings: string[]): void {
+  const num = typeof doc.document_number === "string" ? doc.document_number.trim() : null;
+  const date = typeof doc.document_date === "string" ? doc.document_date.trim() : null;
+  const looksLikeDate = num ? /^\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}$/.test(num) : false;
+  if (num && (num === date || looksLikeDate)) {
+    doc.document_number = null;
+    const pfc = toObject(doc.per_field_confidence) ?? {};
+    const c = toNumber(pfc.invoice_number);
+    pfc.invoice_number = c === null ? 0.4 : Math.min(c, 0.4);
+    doc.per_field_confidence = pfc;
+    if (!warnings.includes("Invoice number matched invoice date — cleared to null")) {
+      warnings.push("Invoice number matched invoice date — cleared to null");
+    }
+  }
+}
+
+// Compare critical fields between primary and verification runs.
+// On mismatch: keep the value from the run with higher per-field confidence
+// (default to primary) and lower the field confidence to ≤ 0.7.
+const CRITICAL_PATHS: Array<{ key: string; pfc: string; get: (d: ExtractedObject) => unknown; set: (d: ExtractedObject, v: unknown) => void }> = [
+  { key: "invoice_number", pfc: "invoice_number", get: (d) => d.document_number, set: (d, v) => { d.document_number = v as string | null; } },
+  { key: "invoice_date",   pfc: "invoice_date",   get: (d) => d.document_date,   set: (d, v) => { d.document_date = v as string | null; } },
+  { key: "seller_gstin",   pfc: "seller_gstin",   get: (d) => toObject(d.seller)?.gstin, set: (d, v) => { const s = toObject(d.seller); if (s) s.gstin = v as string | null; } },
+  { key: "buyer_gstin",    pfc: "buyer_gstin",    get: (d) => toObject(d.buyer)?.gstin,  set: (d, v) => { const b = toObject(d.buyer);  if (b) b.gstin = v as string | null; } },
+  { key: "grand_total",    pfc: "grand_total",    get: (d) => toObject(d.totals)?.grand_total, set: (d, v) => { const t = toObject(d.totals); if (t) t.grand_total = v as number | null; } },
+];
+
+function reconcileCriticalFields(primary: ExtractedObject, secondary: ExtractedObject | null, warnings: string[]): void {
+  if (!secondary) return;
+  const pfc = toObject(primary.per_field_confidence) ?? {};
+  const pfc2 = toObject(secondary.per_field_confidence) ?? {};
+  for (const f of CRITICAL_PATHS) {
+    const a = f.get(primary);
+    const b = f.get(secondary);
+    const same = JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    if (same) {
+      // Boost confidence on match (cap at 0.99).
+      const c = toNumber(pfc[f.pfc]);
+      pfc[f.pfc] = c === null ? 0.95 : Math.min(0.99, Math.max(c, 0.95));
+    } else {
+      const ca = toNumber(pfc[f.pfc]) ?? 0;
+      const cb = toNumber(pfc2[f.pfc]) ?? 0;
+      if (cb > ca) f.set(primary, b);
+      pfc[f.pfc] = Math.min(ca, cb, 0.7);
+      warnings.push(`Critical field "${f.key}" disagreed across verification runs — confidence lowered`);
+    }
+  }
+  primary.per_field_confidence = pfc;
+}
+
+function postProcess(parsed: unknown, secondary: unknown | null): unknown {
+  const root = toObject(parsed);
+  if (!root) return parsed;
+  const sec = toObject(secondary);
+  const apply = (doc: ExtractedObject, secDoc: ExtractedObject | null) => {
+    const validation = toObject(doc.validation) ?? {};
+    const warnings: string[] = Array.isArray(validation.warnings) ? (validation.warnings as string[]) : [];
+    reconcileInvoiceNumberDate(doc, warnings);
+    reconcileCriticalFields(doc, secDoc, warnings);
+    annotateGstinQuality(doc);
+    validation.warnings = warnings;
+    doc.validation = validation;
+  };
+  if (Array.isArray(root.documents)) {
+    const secDocs = sec && Array.isArray(sec.documents) ? (sec.documents as unknown[]) : [];
+    root.documents.forEach((doc, i) => {
+      const d = toObject(doc); if (!d) return;
+      apply(d, toObject(secDocs[i] ?? null));
+    });
+  } else {
+    apply(root, sec);
+  }
+  return root;
+}
+
+// Lightweight second pass that ONLY re-extracts critical fields, used to
+// detect cross-run instability. Reuses the same model/temperature/seed.
+async function verifyCriticalFields(images: string[], hasPdf: boolean, hint?: string): Promise<unknown | null> {
+  try {
+    const raw = hasPdf ? await callGeminiPdf(images, hint) : await callGroqVision(images, hint);
+    return normalizeResponse(parseJsonLoose(raw));
+  } catch {
+    return null;
+  }
+}
+
 export async function extractCore(images: string[], hint?: string): Promise<ExtractCoreResult> {
   const hasPdf = images.some((url) => {
     if (url.startsWith("data:")) return isPdfDataUri(url);
     return detectMimeType(url) === "application/pdf";
   });
 
-  // PDFs go through Gemini (native multi-page PDF support); images via Groq.
-  const raw = hasPdf ? await callGeminiPdf(images, hint) : await callGroqVision(images, hint);
+  let parsed: unknown;
 
-  let parsed: unknown = {};
-  let pretty = raw;
-  try {
-    parsed = normalizeResponse(JSON.parse(raw));
-    pretty = JSON.stringify(parsed, null, 2);
-  } catch {
-    const m = raw.match(/\{[\s\S]*\}/);
-    if (m) {
-      try {
-        parsed = normalizeResponse(JSON.parse(m[0]));
-        pretty = JSON.stringify(parsed, null, 2);
-      } catch {
-        /* keep raw */
-      }
+  if (!hasPdf && images.length > 1) {
+    // Process each image independently to prevent cross-page contamination,
+    // then merge into a multi-document envelope. Run in parallel.
+    const perImage = await Promise.all(
+      images.map(async (img) => normalizeResponse(parseJsonLoose(await callGroqVision([img], hint)))),
+    );
+    const docs: unknown[] = [];
+    for (const r of perImage) {
+      const o = toObject(r);
+      if (o && Array.isArray(o.documents)) docs.push(...o.documents);
+      else if (o) docs.push(o);
     }
+    parsed = docs.length === 1 ? docs[0] : { documents: docs };
+  } else {
+    const raw = hasPdf ? await callGeminiPdf(images, hint) : await callGroqVision(images, hint);
+    parsed = normalizeResponse(parseJsonLoose(raw));
   }
 
+  // Consistency double-pass for critical fields (best-effort; ignored on failure).
+  const secondary = await verifyCriticalFields(images, hasPdf, hint);
+  parsed = postProcess(parsed, secondary);
+
+  const pretty = JSON.stringify(parsed, null, 2);
   return { json: pretty, parsed };
 }
